@@ -3,6 +3,7 @@ pub mod controllers;
 pub mod enums;
 pub mod repositories;
 pub mod services;
+pub mod models;
 
 use std::sync::Arc;
 use crate::config::AppConfig;
