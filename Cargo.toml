@@ -23,3 +23,4 @@ futures-util = "0.3.28"
 serde = { version = "1.0.188", features = ["derive"] }
 rand = "0.8.5"
 reqwest = "0.11.20"
+urlencoding = "2.1.3"
