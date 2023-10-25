@@ -8,6 +8,7 @@ pub mod models;
 use std::sync::Arc;
 use crate::config::AppConfig;
 use clap::Parser;
+use crate::repositories::redis_repository::RedisRepository;
 use crate::repositories::tbank_repository::TBankRepository;
 use crate::services::telegram_service::TelegramService;
 
@@ -22,12 +23,17 @@ async fn main() -> anyhow::Result<()> {
 
     //Instantiate service
     let tbank_repo = TBankRepository::new(
-        app_config.tbank_url.clone(),
+        app_config.tbank_url.clone()
+    );
+
+    let redis_repo = RedisRepository::new(
         app_config.redis_url.clone()
     ).await;
+
     let telegram_service = TelegramService::new(
         &app_config.teloxide_token,
-        tbank_repo
+        tbank_repo,
+        redis_repo
     );
 
     let cloned_telegram_service = telegram_service.clone();

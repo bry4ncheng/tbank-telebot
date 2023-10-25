@@ -12,24 +12,28 @@ use teloxide::{
     },
     utils::command::BotCommands,
 };
+use crate::repositories::redis_repository::RedisRepository;
 
 
 #[derive(Clone)]
 pub struct TelegramService {
     bot: Bot,
     tbank_repository: TBankRepository,
+    redis_repository: RedisRepository
 }
 
 impl TelegramService {
     pub fn new(
         bot_token: &String,
         tbank_repo: TBankRepository,
+        redis_repo: RedisRepository,
     ) -> Self {
         let reqwest_client = Client::new();
         let bot = Bot::with_client(bot_token, reqwest_client);
         Self {
             bot,
-            tbank_repository: tbank_repo
+            tbank_repository: tbank_repo,
+            redis_repository: redis_repo
         }
     }
 
