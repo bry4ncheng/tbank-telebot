@@ -21,7 +21,10 @@ async fn main() -> anyhow::Result<()> {
     let app_config = Arc::new(AppConfig::parse());
 
     //Instantiate service
-    let tbank_repo = TBankRepository::new(app_config.tbank_url.clone());
+    let tbank_repo = TBankRepository::new(
+        app_config.tbank_url.clone(),
+        app_config.redis_url.clone()
+    ).await;
     let telegram_service = TelegramService::new(
         &app_config.teloxide_token,
         tbank_repo

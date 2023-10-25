@@ -9,4 +9,7 @@ pub struct AppConfig {
     #[clap(env)]
     pub tbank_url: String,
 
+    #[clap(env)]
+    pub redis_url: String,
+
 }

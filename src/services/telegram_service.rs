@@ -1,6 +1,6 @@
+
 use crate::enums::telegram::Command;
 use reqwest::Client;
-use teloxide::dispatching::dialogue::ErasedStorage;
 use teloxide::prelude::ResponseResult;
 use teloxide::{prelude::Requester, types::Message, Bot};
 use crate::repositories::tbank_repository::TBankRepository;
@@ -8,8 +8,7 @@ use teloxide::{
     payloads::SendMessageSetters,
     prelude::*,
     types::{
-        InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputMessageContent,
-        InputMessageContentText, Me,
+        InlineKeyboardButton, InlineKeyboardMarkup, Me
     },
     utils::command::BotCommands,
 };
@@ -18,7 +17,7 @@ use teloxide::{
 #[derive(Clone)]
 pub struct TelegramService {
     bot: Bot,
-    tbank_repository: TBankRepository
+    tbank_repository: TBankRepository,
 }
 
 impl TelegramService {
