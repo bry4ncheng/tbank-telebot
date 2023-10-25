@@ -3,5 +3,7 @@ use teloxide::utils::command::*;
 #[command(rename_rule = "lowercase", description = "These commands are supported:")]
 pub enum Command {
     #[command(description = "Initialise the telegram bot.")]
-    Start
+    Start,
+    #[command(description = "Get help from the telegram bot.")]
+    Help
 }

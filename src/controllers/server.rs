@@ -39,9 +39,9 @@ pub async fn serve(
             ),
         );
 
-    info!("Starting server at port {}", 3000);
+    info!("Starting server at port {}", 3001);
 
-    axum::Server::bind(&"0.0.0.0:3000".parse::<SocketAddr>()?)
+    axum::Server::bind(&"0.0.0.0:3001".parse::<SocketAddr>()?)
         .serve(app.into_make_service())
         .await
         .context("Error starting server")
