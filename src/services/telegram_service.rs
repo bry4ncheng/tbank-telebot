@@ -301,16 +301,13 @@ impl TelegramService {
                 &"Back" =>{
                     if q.message.is_some() {
                         let msg = q.message.unwrap();
-                        let chat = msg.clone().chat;
                         let id = msg.clone().id;                   
-                        let keyboard = Self::make_keyboard(["Check Balance", "Transfer", "Logout"].to_vec());
-                        bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
+                        TelegramService::send_logged_in_user_start(bot, id.to_string()).await?;
                     } else if let Some(id) = q.inline_message_id {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
                 &"Check Balance" =>{
-
                     if q.message.is_some() {
                         let msg = q.message.unwrap();
                         let chat = msg.clone().chat;
@@ -393,7 +390,7 @@ impl TelegramService {
     }
 
     async fn send_logged_in_user_start(bot:Bot, id:String) -> ResponseResult<()> {
-        let keyboard = Self::make_keyboard(["Check Balance", "Transfer", "Logout"].to_vec());
+        let keyboard = Self::make_keyboard(["Check Balance", "Transfer", "Logout", "Enable AutoInvest",].to_vec());
         bot.send_message(id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
         Ok(())
     }
