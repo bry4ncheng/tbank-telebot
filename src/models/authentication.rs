@@ -1,21 +1,42 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RequestOTP {
     #[serde(rename = "serviceName")]
-    service_name: String,
+    pub service_name: String,
     #[serde(rename = "userID")]
-    user_id: String,
+    pub user_id: String,
     #[serde(rename = "PIN")]
-    pin: String,
+    pub pin: String,
+}
+
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LoginRequest {
+    #[serde(rename = "serviceName")]
+    pub service_name: String,
+    #[serde(rename = "userID")]
+    pub user_id: String,
+    #[serde(rename = "PIN")]
+    pub pin: String,
+    #[serde(rename = "OTP")]
+    pub otp: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReplyOTP {
     #[serde(rename = "ErrorText")]
-    error_text: String,
+    pub error_text: Option<String>,
     #[serde(rename = "GlobalErrorID")]
-    global_error_id: String,
+    pub global_error_id: Option<String>,
     #[serde(rename = "ErrorDetails")]
-    error_details: String,
+    pub error_details: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReplyLoginCustomer {
+    #[serde(rename = "CustomerID")]
+    pub customer_id: Option<String>,
+    #[serde(rename = "BankID")]
+    pub bank_id: Option<String>,
 }

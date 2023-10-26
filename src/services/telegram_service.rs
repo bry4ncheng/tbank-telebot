@@ -1,8 +1,15 @@
 
+use std::sync::Arc;
+
+use crate::config::AppConfig;
 use crate::enums::telegram::Command;
+use crate::models::authentication::{RequestOTP, ReplyOTP, LoginRequest, ReplyLoginCustomer};
+use crate::models::customer::CustomerData;
+use clap::Parser;
 use reqwest::Client;
 use teloxide::prelude::ResponseResult;
 use teloxide::{prelude::Requester, types::Message, Bot};
+use tracing::info;
 use crate::repositories::tbank_repository::TBankRepository;
 use teloxide::{
     payloads::SendMessageSetters,
@@ -18,26 +25,21 @@ use crate::repositories::redis_repository::RedisRepository;
 #[derive(Clone)]
 pub struct TelegramService {
     bot: Bot,
-    tbank_repository: TBankRepository,
-    redis_repository: RedisRepository
 }
 
 impl TelegramService {
     pub fn new(
         bot_token: &String,
-        tbank_repo: TBankRepository,
-        redis_repo: RedisRepository,
     ) -> Self {
         let reqwest_client = Client::new();
         let bot = Bot::with_client(bot_token, reqwest_client);
         Self {
             bot,
-            tbank_repository: tbank_repo,
-            redis_repository: redis_repo
         }
     }
 
     pub async fn listen_and_reply(self) {
+    
         let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(Self::message_handler))
         .branch(Update::filter_callback_query().endpoint(Self::callback_handler));
@@ -67,6 +69,19 @@ impl TelegramService {
         msg: Message,
         me: Me,
     ) -> ResponseResult<()>  {
+        //Instantiate service
+        let app_config: Arc<AppConfig> = Arc::new(AppConfig::parse());
+        info!("READ APP CONFIG");
+
+        let redis_repo = RedisRepository::new(
+            app_config.redis_url.clone()
+        ).await;
+        info!("GOT REDIS");
+        
+        let tbank_repo = TBankRepository::new(
+            app_config.tbank_url.clone()
+        );
+        info!("GOT TBANK");
         if let Some(text) = msg.text() {
             match BotCommands::parse(text, me.username()) {
                 Ok(Command::Help) => {
@@ -75,11 +90,139 @@ impl TelegramService {
                 }
                 Ok(Command::Start) => {
                     // Create a list of buttons and send them.
-                    let _ = Self::send_start(bot, msg.chat.id.to_string());
+                    TelegramService::to_send_correct_start(bot, msg, redis_repo.clone(), true).await?;            
                 }
                 Err(_) => {
                     // Check redis state on what step he is on or if he has any valid state.
-                    bot.send_message(msg.chat.id, "Command not found!").await?;
+                    let action_key: String = format!("{}:{}",msg.chat.id.to_string(), "action");
+
+                    match redis_repo.clone().get_data_from_redis(&action_key).await {
+                        Ok(result) => {
+                            match &result.as_str() {
+                                &"Login" =>{
+                                    let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                                    let _ = redis_repo.clone().set_data_in_redis(&action_key,"Login:PIN".to_owned(), true).await;
+                                    let part_key: String = format!("{}:{}",msg.chat.id.to_string(), "LoginStep");
+                                    let _ = redis_repo.clone().remove_data_in_redis(&part_key).await;
+                                    let empty = RequestOTP{ 
+                                        user_id: text.to_string(),
+                                        service_name: "requestOTP".to_string(),
+                                        pin: "".to_string(),
+                                    };
+                                    let j = serde_json::to_string(&empty).unwrap();
+                                    let _ = redis_repo.clone().set_data_in_redis(&part_key,j, true).await;
+                                    let keyboard = Self::make_keyboard(["Cancel"].to_vec());
+                                    let my_int: i32 = msg.id.to_string().parse().unwrap();  
+                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int)).await?;
+                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                    bot.send_message(msg.chat.id, "Please key in your PIN").reply_markup(keyboard).await?;
+                                }
+                                &"Login:PIN"=>{
+                                    bot.delete_message(msg.chat.id, msg.id).await?;
+                                    let my_int: i32 = msg.id.to_string().parse().unwrap();
+                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                    let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                                    let part_key: String = format!("{}:{}",msg.chat.id.to_string(), "LoginStep");
+                                    match redis_repo.clone().get_data_from_redis(&part_key).await{
+                                        Ok(partial_result) => {
+                                            let _ = redis_repo.clone().remove_data_in_redis(&part_key).await;
+                                            let mut data:RequestOTP = serde_json::from_str(&partial_result).unwrap();
+                                            data.pin = text.to_string();
+                                            bot.send_message(msg.chat.id, "Checking your credentials....").await?;
+                                            match tbank_repo.request_otp(data.clone()).await{
+                                                Ok(reply) => {
+                                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int+1)).await?;
+                                                    let reply_otp = reply.content.service_response.service_response_header as ReplyOTP;
+                                                    match reply_otp.error_details{
+                                                        Some(status) => {
+                                                            info!("{}", status);
+                                                            if status != "success" {
+                                                                bot.send_message(msg.chat.id, "Sorry It seems like we could not authenticate you. Please try again.").await?;
+                                                                TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
+                                                            }else{
+                                                                let partial_login_request = LoginRequest{ 
+                                                                    service_name: "loginCustomer".to_owned(), 
+                                                                    user_id: data.user_id, 
+                                                                    pin: data.pin, 
+                                                                    otp: "".to_owned() 
+                                                                };
+                                                                let j = serde_json::to_string(&partial_login_request).unwrap();
+                                                                let _ = redis_repo.clone().set_data_in_redis(&part_key,j, true).await;
+                                                                let _ = redis_repo.clone().set_data_in_redis(&action_key,"Login:OTP".to_owned(), true).await;
+                                                                let keyboard = Self::make_keyboard(["Cancel"].to_vec());
+                                                                bot.send_message(msg.chat.id, "Please key in your OTP").reply_markup(keyboard).await?;
+                                                            }   
+                                                        },
+                                                        None => {
+                                                            bot.send_message(msg.chat.id, "Sorry It seems like we could not authenticate you. Please try again.").await?;
+                                                            TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
+                                                        }
+                                                    }
+                                                                                 
+                                                },
+                                                Err(_) => {
+                                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int+1)).await?;
+                                                    bot.send_message(msg.chat.id, "Sorry It seems like we could not authenticate you. Please try again.").await?;
+                                                    TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
+                                                },
+                                            }
+                                        },
+                                        Err(_) => {
+                                            bot.send_message(msg.chat.id, "Sorry that your session for sign up is gone. Please try again.").await?;
+                                            TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
+                                        },
+                                    }
+                                }
+                                &"Login:OTP"=>{
+                                    bot.delete_message(msg.chat.id, msg.id).await?;
+                                    let my_int: i32 = msg.id.to_string().parse().unwrap();
+                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                    let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                                    let part_key: String = format!("{}:{}",msg.chat.id.to_string(), "LoginStep");
+                                    match redis_repo.clone().get_data_from_redis(&part_key).await{
+                                        Ok(partial_result) => {
+                                            let _ = redis_repo.clone().remove_data_in_redis(&part_key).await;
+                                            let mut data:LoginRequest = serde_json::from_str(&partial_result).unwrap();
+                                            data.otp = text.to_string();
+                                            bot.send_message(msg.chat.id, "Logging In ....").await?;
+                                            match tbank_repo.login_customer(data.clone()).await{
+                                                Ok(reply) => {
+                                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int+1)).await?;
+                                                    if reply.content.service_login_response.service_response_header.error_details.unwrap() != "Success".to_string() {
+                                                        bot.send_message(msg.chat.id, "Sorry It seems like we could not authenticate you. Please try again.").await?;
+                                                        TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
+                                                    }else{
+                                                        data.otp = "999999".to_string();
+                                                        let j = serde_json::to_string(&data).unwrap();
+                                                        let full_key: String = format!("{}:{}",msg.chat.id.to_string(), "LoginCred");
+                                                        let _ = redis_repo.clone().set_data_in_redis(&full_key,j, false).await;
+                                                        TelegramService::send_logged_in_user_start( bot, msg.chat.id.to_string()).await?; 
+                                                    }                                
+                                                },
+                                                Err(_) => {
+                                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int+1)).await?;
+                                                    bot.send_message(msg.chat.id, "Sorry It seems like we could not authenticate you. Please try again.").await?;
+                                                    TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
+                                                },
+                                            }
+                                        },
+                                        Err(_) => {
+                                            bot.send_message(msg.chat.id, "Sorry that your session for sign up is gone. Please try again.").await?;
+                                            TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
+                                        },
+                                    }
+                                }
+                                &"Sign Up" =>{
+                                }
+                                _ => {
+                                    TelegramService::to_send_correct_start(bot, msg, redis_repo.clone(), false).await?;            
+                                }
+                            }
+                        },
+                        Err(_) => {
+                            bot.send_message(msg.chat.id, "Command not found!").await?;
+                        },
+                    };
                 }
             }
         }
@@ -90,7 +233,19 @@ impl TelegramService {
     async fn callback_handler(bot: Bot, q: CallbackQuery) -> ResponseResult<()> {
         if let Some(action) = q.data {
             bot.answer_callback_query(q.id).await?;
+            //Instantiate service
+            let app_config: Arc<AppConfig> = Arc::new(AppConfig::parse());
+            info!("READ APP CONFIG");
 
+            let redis_repo = RedisRepository::new(
+                app_config.redis_url.clone()
+            ).await;
+            info!("GOT REDIS");
+            
+            // let tbank_repo = TBankRepository::new(
+            //     app_config.tbank_url.clone()
+            // );
+            // info!("GOT TBANK");
             match &action.as_str() {
                 &"Login" =>{
                     // Push to redis user state to invalidate 
@@ -98,9 +253,12 @@ impl TelegramService {
                     // Edit text of the message to which the buttons were attached
                     let keyboard = Self::make_keyboard(["Cancel"].to_vec());
                     if let Some(Message { id, chat, .. }) = q.message {
+                        let action_key = format!("{}:{}", chat.id.to_string(), "action");
+                        let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                        let _ = redis_repo.set_data_in_redis(&action_key,"Login".to_owned(), true).await;
                         bot.edit_message_text(chat.id, id, text).reply_markup(keyboard).await?;
                     } else if let Some(id) = q.inline_message_id {
-                        bot.edit_message_text_inline(id, text).reply_markup(keyboard).await?;
+                        TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
                 &"Sign Up" =>{
@@ -109,31 +267,45 @@ impl TelegramService {
                     // Edit text of the message to which the buttons were attached
                     let keyboard = Self::make_keyboard(["Cancel"].to_vec());
                     if let Some(Message { id, chat, .. }) = q.message {
+                        let action_key = format!("{}:{}", chat.id.to_string(), "action");
+                        let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                        let _ = redis_repo.set_data_in_redis(&action_key,"Sign Up".to_owned(), true).await;
                         bot.edit_message_text(chat.id, id, text).reply_markup(keyboard).await?;
                     } else if let Some(id) = q.inline_message_id {
-                        bot.edit_message_text_inline(id, text).reply_markup(keyboard).await?;
+                        TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
                 &"Cancel" =>{
                     // Delete user state to invalidate 
-                    let text = "User has cancel the action";
                     if let Some(Message { id, chat, .. }) = q.message {
+                        let action_key = format!("{}:{}", chat.id.to_string(), "action");
+                        let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
                         bot.delete_message(chat.id, id).await?;
-                        let _ = Self::send_start(bot, chat.id.to_string());
+                        TelegramService::send_start( bot, chat.id.to_string()).await?;
                     } else if let Some(id) = q.inline_message_id {
-                        bot.edit_message_text_inline(id.clone(), text).await?;
-                        let _ = Self::send_start(bot, id);
+                        TelegramService::send_start( bot, id.to_string()).await?;
+                    }
+                }
+                &"Logout" =>{
+                    // Delete user creds
+                    if let Some(Message { id, chat, .. }) = q.message {
+                        let full_key: String = format!("{}:{}",chat.id.to_string(), "LoginCred");
+                        let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
+                        bot.delete_message(chat.id, id).await?;
+                        TelegramService::send_start( bot, chat.id.to_string()).await?;
+                    } else if let Some(id) = q.inline_message_id {
+                        TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
                 _ => {
                     //Invalidate user state
-                    let text = "User has done an invalid action";
                     if let Some(Message { id, chat, .. }) = q.message {
+                        let action_key = format!("{}:{}", chat.id.to_string(), "action");
+                        let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
                         bot.delete_message(chat.id, id).await?;
-                        let _ = Self::send_start(bot, chat.id.to_string());
+                        TelegramService::send_start( bot, chat.id.to_string()).await?;
                     } else if let Some(id) = q.inline_message_id {
-                        bot.edit_message_text_inline(id.clone(), text).await?;
-                        let _ = Self::send_start(bot, id);
+                        TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
             }
@@ -142,8 +314,34 @@ impl TelegramService {
         Ok(())
     }
 
-    async fn send_start(bot:Bot, id:String){
+
+    async fn to_send_correct_start(bot:Bot, msg: Message, redis_repo:RedisRepository, is_start: bool) -> ResponseResult<()> {
+        let full_key: String = format!("{}:{}", msg.chat.id.to_string(), "LoginCred");
+        let result = redis_repo.get_data_from_redis(&full_key).await;
+        match result {
+            Ok(_) => {
+                bot.delete_message(msg.chat.id, msg.id).await?;
+                TelegramService::send_logged_in_user_start( bot, msg.chat.id.to_string()).await?; 
+            },
+            Err(_) => {
+                if(!is_start){
+                    bot.send_message(msg.chat.id, "Sorry that your session for sign up is gone. Please try again.").await?;
+                }
+                TelegramService::send_start( bot, msg.chat.id.to_string()).await?;
+            },
+        }
+        Ok(())
+    }
+
+    async fn send_start(bot:Bot, id:String) -> ResponseResult<()> {
         let keyboard = Self::make_keyboard(["Login", "Sign Up"].to_vec());
-        let _ = bot.send_message(id, "Welcome to TBANK Bot! How can I help you today?").reply_markup(keyboard).await;
+        bot.send_message(id, "Welcome to TBANK Bot! How can I help you today?").reply_markup(keyboard).await?;
+        Ok(())
+    }
+
+    async fn send_logged_in_user_start(bot:Bot, id:String) -> ResponseResult<()> {
+        let keyboard = Self::make_keyboard(["Check Balance", "Transfer", "Logout"].to_vec());
+        bot.send_message(id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
+        Ok(())
     }
 }

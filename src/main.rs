@@ -21,19 +21,8 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     let app_config = Arc::new(AppConfig::parse());
 
-    //Instantiate service
-    let tbank_repo = TBankRepository::new(
-        app_config.tbank_url.clone()
-    );
-
-    let redis_repo = RedisRepository::new(
-        app_config.redis_url.clone()
-    ).await;
-
     let telegram_service = TelegramService::new(
         &app_config.teloxide_token,
-        tbank_repo,
-        redis_repo
     );
 
     let cloned_telegram_service = telegram_service.clone();

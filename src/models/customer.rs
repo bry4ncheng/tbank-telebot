@@ -38,13 +38,13 @@ pub struct RequestOnboardCustomer {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CustomerData {
     #[serde(rename = "AccountID")]
-    account_id: String,
+    pub account_id: String,
     #[serde(rename = "branchID")]
-    branch_id: Option<String>,
+    pub branch_id: Option<String>,
     #[serde(rename = "PIN")]
-    pin: String,
+    pub pin: String,
     #[serde(rename = "CustomerID")]
-    customer_id: String,
+    pub customer_id: String,
 }
 
 #[derive(Serialize, Deserialize)]

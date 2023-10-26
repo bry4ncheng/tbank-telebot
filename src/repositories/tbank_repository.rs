@@ -1,10 +1,10 @@
 use anyhow::anyhow;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
-use tracing::warn;
+use tracing::{warn, info};
 use crate::models::customer::{ReplyOnboardCustomer, RequestOnboardCustomer};
-use crate::models::TBankResponse;
+use crate::models::{TBankResponse, TBankLoginResponse};
 use urlencoding::encode;
-use crate::models::authentication::{ReplyOTP, RequestOTP};
+use crate::models::authentication::{ReplyOTP, RequestOTP, LoginRequest, ReplyLoginCustomer};
 
 
 #[allow(dead_code)]
@@ -61,8 +61,32 @@ impl TBankRepository {
             .send()
             .await;
         let res = match req {
-            Ok(res) => {
+            Ok(res) => {                
                 Ok(res.json::<TBankResponse<ReplyOTP>>().await.unwrap())
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the RequestOTP API."))
+            }
+        };
+        res
+    }
+
+    pub async fn login_customer(self, body: LoginRequest) -> anyhow::Result<TBankLoginResponse> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let serde_body = serde_json::to_string(&body).unwrap();
+        let consumer_id = encode("RIB").to_string();
+        let encoded_header = encode(&serde_body).to_string();
+        let url = format!("{}?Header={}ConsumerID={}", self.tbank_url, encoded_header, consumer_id);
+        let req = self.client
+            .post(url)
+            .headers(headers)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                Ok(res.json::<TBankLoginResponse>().await.unwrap())
             }
             Err(e) => {
                 warn!("{}", e);
