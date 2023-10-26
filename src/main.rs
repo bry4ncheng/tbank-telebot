@@ -8,8 +8,6 @@ pub mod models;
 use std::sync::Arc;
 use crate::config::AppConfig;
 use clap::Parser;
-use crate::repositories::redis_repository::RedisRepository;
-use crate::repositories::tbank_repository::TBankRepository;
 use crate::services::telegram_service::TelegramService;
 
 #[tokio::main]

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use crate::config::AppConfig;
 use crate::enums::telegram::Command;
-use crate::models::authentication::{RequestOTP, ReplyOTP, LoginRequest, ReplyLoginCustomer};
-use crate::models::customer::CustomerData;
+use crate::models::{Error, CustomerRequest};
+use crate::models::authentication::{RequestOTP, ServiceLoginOtpResponse};
 use clap::Parser;
 use reqwest::Client;
 use teloxide::prelude::ResponseResult;
@@ -132,7 +132,7 @@ impl TelegramService {
                                             match tbank_repo.request_otp(data.clone()).await{
                                                 Ok(reply) => {
                                                     bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int+1)).await?;
-                                                    let reply_otp = reply.content.service_response.service_response_header as ReplyOTP;
+                                                    let reply_otp = reply.content.service_response.service_response_header as Error;
                                                     match reply_otp.error_details{
                                                         Some(status) => {
                                                             info!("{}", status);
@@ -140,7 +140,7 @@ impl TelegramService {
                                                                 bot.send_message(msg.chat.id, "Sorry It seems like we could not authenticate you. Please try again.").await?;
                                                                 TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
                                                             }else{
-                                                                let partial_login_request = LoginRequest{ 
+                                                                let partial_login_request = CustomerRequest{ 
                                                                     service_name: "loginCustomer".to_owned(), 
                                                                     user_id: data.user_id, 
                                                                     pin: data.pin, 
@@ -182,13 +182,14 @@ impl TelegramService {
                                     match redis_repo.clone().get_data_from_redis(&part_key).await{
                                         Ok(partial_result) => {
                                             let _ = redis_repo.clone().remove_data_in_redis(&part_key).await;
-                                            let mut data:LoginRequest = serde_json::from_str(&partial_result).unwrap();
+                                            let mut data:CustomerRequest = serde_json::from_str(&partial_result).unwrap();
                                             data.otp = text.to_string();
                                             bot.send_message(msg.chat.id, "Logging In ....").await?;
                                             match tbank_repo.login_customer(data.clone()).await{
                                                 Ok(reply) => {
                                                     bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int+1)).await?;
-                                                    if reply.content.service_login_response.service_response_header.error_details.unwrap() != "Success".to_string() {
+                                                    let response = reply.content.service_response as ServiceLoginOtpResponse;
+                                                    if response.service_response_header.error_details.unwrap() != "Success".to_string() {
                                                         bot.send_message(msg.chat.id, "Sorry It seems like we could not authenticate you. Please try again.").await?;
                                                         TelegramService::send_start( bot, msg.chat.id.to_string()).await?; 
                                                     }else{
@@ -242,10 +243,10 @@ impl TelegramService {
             ).await;
             info!("GOT REDIS");
             
-            // let tbank_repo = TBankRepository::new(
-            //     app_config.tbank_url.clone()
-            // );
-            // info!("GOT TBANK");
+            let tbank_repo = TBankRepository::new(
+                app_config.tbank_url.clone()
+            );
+            info!("GOT TBANK");
             match &action.as_str() {
                 &"Login" =>{
                     // Push to redis user state to invalidate 
@@ -297,6 +298,55 @@ impl TelegramService {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
+                &"Back" =>{
+                    if q.message.is_some() {
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id;                   
+                        let keyboard = Self::make_keyboard(["Check Balance", "Transfer", "Logout"].to_vec());
+                        bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
+                    } else if let Some(id) = q.inline_message_id {
+                        TelegramService::send_start( bot, id.to_string()).await?;
+                    }
+                }
+                &"Check Balance" =>{
+
+                    if q.message.is_some() {
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id;
+                        bot.edit_message_text(chat.id, id, "Please wait ...").await?;
+                        let full_key: String = format!("{}:{}",chat.id.to_string(), "LoginCred");
+                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                        match result {
+                            Ok(login_cred) => {
+                                let mut data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                data.service_name = "getCustomerAccounts".to_owned();
+                                let account_result = tbank_repo.get_customer_accounts(data).await;
+                                match account_result{
+                                    Ok(accounts) => {
+                                        let mut full_text = "Your Account Balance is:\n".to_string();
+                                        for one in accounts{
+                                            let temp =format!("{} - {}{}\n", one.account_id, one.currency, one.balance);
+                                            full_text = format!("{}{}", full_text, temp);
+                                        }
+                                        let keyboard = Self::make_keyboard(["Back"].to_vec());
+                                        bot.edit_message_text(chat.id, id, full_text).reply_markup(keyboard).await?;
+                                    }
+                                    Err(_) => {
+                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                                    },
+                                }
+                            },
+                            Err(_) => {
+                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                            },
+                        }
+                    } else if let Some(id) = q.inline_message_id {
+                        TelegramService::send_start( bot, id.to_string()).await?;
+                    }
+
+                }
                 _ => {
                     //Invalidate user state
                     if let Some(Message { id, chat, .. }) = q.message {
@@ -321,11 +371,14 @@ impl TelegramService {
         match result {
             Ok(_) => {
                 bot.delete_message(msg.chat.id, msg.id).await?;
+                if !is_start{
+                    bot.send_message(msg.chat.id, "Sorry something went wrong. Please try again.").await?;
+                }
                 TelegramService::send_logged_in_user_start( bot, msg.chat.id.to_string()).await?; 
             },
             Err(_) => {
-                if(!is_start){
-                    bot.send_message(msg.chat.id, "Sorry that your session for sign up is gone. Please try again.").await?;
+                if !is_start{
+                    bot.send_message(msg.chat.id, "Sorry something went wrong. Please try again.").await?;
                 }
                 TelegramService::send_start( bot, msg.chat.id.to_string()).await?;
             },

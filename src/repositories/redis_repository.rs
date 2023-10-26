@@ -1,8 +1,7 @@
 use anyhow::anyhow;
-use bb8_redis::{RedisConnectionManager};
+use bb8_redis::RedisConnectionManager;
 use bb8_redis::bb8::Pool;
 use bb8_redis::redis::{AsyncCommands, RedisError};
-use serde_json::Value;
 use tracing::warn;
 
 const REDIS_PREFIX: &str = "usr";
@@ -36,9 +35,9 @@ impl RedisRepository {
 
     pub async fn set_data_in_redis(self, key: &String, value: String, to_expire: bool) -> anyhow::Result<()> {
         let mut redis_conn = self.redis_client.get().await?;
-        if(to_expire){
-            //1 day ttl
-            let res : Result<(), RedisError> = redis_conn.set_ex(format!("{}:{}", REDIS_PREFIX, key.clone()), value, 86400).await;
+        if to_expire {
+            //2 min TTL
+            let res : Result<(), RedisError> = redis_conn.set_ex(format!("{}:{}", REDIS_PREFIX, key.clone()), value, 120).await;
             return match res {
                 Ok(_) => Ok(()),
                 Err(e) => {

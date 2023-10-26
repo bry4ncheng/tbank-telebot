@@ -36,21 +36,41 @@ pub struct RequestOnboardCustomer {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CustomerData {
-    #[serde(rename = "AccountID")]
-    pub account_id: String,
-    #[serde(rename = "branchID")]
-    pub branch_id: Option<String>,
-    #[serde(rename = "PIN")]
-    pub pin: String,
-    #[serde(rename = "CustomerID")]
-    pub customer_id: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ReplyOnboardCustomer {
+#[serde(rename_all = "camelCase")]
+pub struct GetCustomerAccounts<T> {
     #[serde(rename = "ServiceRespHeader")]
     pub service_response_header: Error,
-    #[serde(rename = "CustomerDetails")]
-    pub customer_details: Option<CustomerData>
+
+    #[serde(rename = "AccountList")]
+    pub account_list: Account<T>
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Account<T> {
+    pub account: T
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountData {
+    pub interest_rate: String,
+    #[serde(rename = "accountID")]
+    pub account_id: String,
+    pub parent_account_flag: String,
+    pub balance: String,
+    #[serde(rename = "productID")]
+    pub product_id: String,
+    pub current_status: String,
+    pub currency: String,
+    pub home_branch: String,
+    pub account_open_date: String,
+    pub maintenancehistory: Maintenancehistory,
+    #[serde(rename = "officerID")]
+    pub officer_id: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Maintenancehistory {
+    pub last_transaction_branch: String,
+    pub last_maintenance_officer: String,
 }
