@@ -2,10 +2,10 @@ use anyhow::anyhow;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::Value;
 use tracing::{warn};
-use crate::models::customer::{RequestOnboardCustomer, AccountData, GetCustomerAccounts, GetCustomerDetails, OnBoardCustomerData};
+use crate::models::customer::{AccountData, GetCustomerAccounts, GetCustomerDetails, OnBoardCustomerData};
 use crate::models::{TBankResponse, Error, ServiceResponseHeader, CustomerRequest};
 use urlencoding::encode;
-use crate::models::authentication::{RequestOTP, ReplyOnboardCustomer, ServiceLoginOtpResponse};
+use crate::models::authentication::{RequestOTP, ServiceLoginOtpResponse};
 
 
 #[allow(dead_code)]
@@ -89,6 +89,32 @@ impl TBankRepository {
         let res = match req {
             Ok(res) => {
                 Ok(res.json::<TBankResponse<ServiceLoginOtpResponse>>().await.unwrap())
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the RequestOTP API."))
+            }
+        };
+        res
+    }
+
+    pub async fn create_account(self, body: CustomerRequest) -> anyhow::Result<String> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let header = &serde_json::to_string(&body).unwrap();
+        let encoded_header = encode(header);
+        let encoded_content =
+            r#"{"Content":{"productID":"101","openingBalance":"0","currency":"SGD","isRestricted":false,"isServiceChargeWaived":true,"isMinor":false,"makeDefaultAccount":false}}"#;
+        let url = format!("{}?Header={}Content={}ConsumerID={}", self.tbank_url, encoded_header, encoded_content, "Teller");
+        let req = self.client
+            .post(url)
+            .headers(headers)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                let temp = res.json::<Value>().await.unwrap();
+                Ok(temp["Content"]["ServiceResponse"]["accountID"]["_content_"].to_string())
             }
             Err(e) => {
                 warn!("{}", e);
