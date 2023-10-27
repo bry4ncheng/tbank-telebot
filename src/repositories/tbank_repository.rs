@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::Value;
-use tracing::{warn};
+use tracing::{warn, info};
 use crate::models::customer::{AccountData, GetCustomerAccounts, GetCustomerDetails, OnBoardCustomerData};
 use crate::models::{TBankResponse, Error, ServiceResponseHeader, CustomerRequest};
 use urlencoding::encode;
@@ -105,7 +105,7 @@ impl TBankRepository {
         let encoded_header = encode(header);
         let encoded_content =
             r#"{"Content":{"productID":"101","openingBalance":"0","currency":"SGD","isRestricted":false,"isServiceChargeWaived":true,"isMinor":false,"makeDefaultAccount":false}}"#;
-        let url = format!("{}?Header={}Content={}ConsumerID={}", self.tbank_url, encoded_header, encoded_content, "Teller");
+        let url = format!("{}?Header={}&Content={}&ConsumerID={}", self.tbank_url, encoded_header, encoded_content, "Teller");
         let req = self.client
             .post(url)
             .headers(headers)
@@ -114,6 +114,7 @@ impl TBankRepository {
         let res = match req {
             Ok(res) => {
                 let temp = res.json::<Value>().await.unwrap();
+                info!("{:?}", temp);
                 Ok(temp["Content"]["ServiceResponse"]["accountID"]["_content_"].to_string())
             }
             Err(e) => {
