@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::Value;
 use tracing::{warn};
-use crate::models::customer::{RequestOnboardCustomer, AccountData, GetCustomerAccounts};
+use crate::models::customer::{RequestOnboardCustomer, AccountData, GetCustomerAccounts, GetCustomerDetails, OnBoardCustomerData};
 use crate::models::{TBankResponse, Error, ServiceResponseHeader, CustomerRequest};
 use urlencoding::encode;
 use crate::models::authentication::{RequestOTP, ReplyOnboardCustomer, ServiceLoginOtpResponse};
@@ -25,7 +25,7 @@ impl TBankRepository {
     }
 
     //TBANK
-    pub async fn onboard_customer(self, body: RequestOnboardCustomer) -> anyhow::Result<TBankResponse<ReplyOnboardCustomer>> {
+    pub async fn onboard_customer(self, body: OnBoardCustomerData) -> anyhow::Result<serde_json::Value> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
         let serde_body = serde_json::to_string(&body).unwrap();
@@ -39,7 +39,8 @@ impl TBankRepository {
             .await;
         let res = match req {
             Ok(res) => {
-                Ok(res.json::<TBankResponse<ReplyOnboardCustomer>>().await.unwrap())
+                Ok(res.json::<serde_json::Value>().await.unwrap())
+                // Ok(res.json::<TBankResponse<ReplyOnboardCustomer>>().await.unwrap())
             }
             Err(e) => {
                 warn!("{}", e);
@@ -125,6 +126,31 @@ impl TBankRepository {
                     }
                 }
                 Ok(vec_to_return)
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the RequestOTP API."))
+            }
+        };
+        res
+    }
+
+    pub async fn get_customer_details(self, body: CustomerRequest) -> anyhow::Result<TBankResponse<GetCustomerDetails>> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let serde_body = serde_json::to_string(&body).unwrap();
+        let consumer_id = encode("RIB").to_string();
+        let encoded_header: String = encode(&serde_body).to_string();
+        let url = format!("{}?Header={}ConsumerID={}", self.tbank_url, encoded_header, consumer_id);
+        let req = self.client
+            .post(url)
+            .headers(headers)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                
+                Ok(res.json::<TBankResponse<GetCustomerDetails>>().await.unwrap())
             }
             Err(e) => {
                 warn!("{}", e);
