@@ -99,6 +99,9 @@ impl TelegramService {
                     match redis_repo.clone().get_data_from_redis(&action_key).await {
                         Ok(result) => {
                             match &result.as_str() {
+                                &"Transfer" =>{
+
+                                }
                                 &"Login" =>{
                                     let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
                                     let _ = redis_repo.clone().set_data_in_redis(&action_key,"Login:PIN".to_owned(), true).await;
@@ -305,6 +308,30 @@ impl TelegramService {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
+                &"Transfer" =>{
+                    // Delete user state to invalidate 
+                    if q.message.is_some() {
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id; 
+                        let full_key: String = format!("{}:{}",chat.id.to_string(), "LoginCred");
+                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                        match result {
+                            Ok(login_cred) => {
+                                let mut data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                data.service_name = "getBeneficiaryList".to_owned(); 
+                                // Do call 
+                                let keyboard = Self::make_keyboard(["Add Beneficiary".to_owned(), "Back".to_owned()].to_vec());
+                                bot.edit_message_text(chat.id, id, "Where would you like to trasnfer to?").reply_markup(keyboard).await?;
+                            }
+                            Err(_) => {
+                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                            },
+                        }
+                    } else if let Some(id) = q.inline_message_id {
+                        TelegramService::send_start( bot, id.to_string()).await?;
+                    }
+                }
                 &"Create" =>{
                     // Delete user state to invalidate 
                     if q.message.is_some() {
@@ -382,6 +409,8 @@ impl TelegramService {
                 }
                 &"Back" =>{
                     if let Some(Message { id, chat, .. }) = q.message {
+                        // let action_key = format!("{}:{}", chat.id.to_string(), "action");
+                        // let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
                         let keyboard = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), "Enable AutoInvest".to_owned(),].to_vec());
                         bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
                     } else if let Some(id) = q.inline_message_id {
