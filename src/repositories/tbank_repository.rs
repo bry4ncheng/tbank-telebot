@@ -5,7 +5,10 @@ use tracing::{warn, info};
 use crate::models::customer::{AccountData, GetCustomerAccounts, GetCustomerDetails, OnBoardCustomerData};
 use crate::models::{TBankResponse, Error, ServiceResponseHeader, CustomerRequest};
 use urlencoding::encode;
+use crate::enums::beneficiary::BeneficiaryEnum;
+use crate::models;
 use crate::models::authentication::{RequestOTP, ServiceLoginOtpResponse};
+use crate::models::transaction::{AddBeneficiaryBody, Beneficiaries, TransferBody, TransferResponse};
 
 
 #[allow(dead_code)]
@@ -178,6 +181,105 @@ impl TBankRepository {
             Ok(res) => {
                 
                 Ok(res.json::<TBankResponse<GetCustomerDetails>>().await.unwrap())
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the RequestOTP API."))
+            }
+        };
+        res
+    }
+    pub async fn get_beneficiaries(self, body: CustomerRequest, _beneficiary_type: BeneficiaryEnum) -> anyhow::Result<Vec<models::transaction::Beneficiary>> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let serde_body = serde_json::to_string(&body).unwrap();
+        let consumer_id = encode("RIB").to_string();
+        let encoded_header: String = encode(&serde_body).to_string();
+        //let beneficiary_type = beneficiary_type.to_string();
+        let content: String = r#"{"Content":{"accountGroup":"OTHER"}}"#.to_string();
+        let encoded_content = encode(&content).to_string();
+        let url = format!("{}?Header={}Content={}ConsumerID={}", self.tbank_url, encoded_header, encoded_content, consumer_id);
+        let req = self.client
+            .post(url)
+            .headers(headers)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                let temp = res.json::<Value>().await.unwrap();
+                let beneficiary_vec = match serde_json::from_value::<Beneficiaries>(temp["Content"]["BeneficiaryList"].clone()) {
+                    Ok(res) => {
+                        Ok(res.beneficiary)
+                    }
+                    Err(_) => {
+                        Ok(vec![])
+                    }
+                };
+                beneficiary_vec
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the RequestOTP API."))
+            }
+        };
+        res
+    }
+
+    pub async fn add_beneficiary(self, body: CustomerRequest, content: AddBeneficiaryBody) -> anyhow::Result<String> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let serde_body = serde_json::to_string(&body).unwrap();
+        let serde_content = serde_json::to_string(&content).unwrap();
+        let consumer_id = encode("RIB").to_string();
+        let encoded_header: String = encode(&serde_body).to_string();
+        //let beneficiary_type = beneficiary_type.to_string();
+        let encoded_content = encode(&serde_content).to_string();
+        let url = format!("{}?Header={}Content={}ConsumerID={}", self.tbank_url, encoded_header, encoded_content, consumer_id);
+        let req = self.client
+            .post(url)
+            .headers(headers)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                let temp = res.json::<Value>().await.unwrap();
+                let msg = temp["Content"]["ServiceRespHeader"]["ErrorText"].clone().to_string();
+                Ok(msg)
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the RequestOTP API."))
+            }
+        };
+        res
+    }
+
+    pub async fn transfer(self, body: CustomerRequest, content: TransferBody) -> anyhow::Result<TransferResponse> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let serde_body = serde_json::to_string(&body).unwrap();
+        let serde_content = serde_json::to_string(&content).unwrap();
+        let consumer_id = encode("RIB").to_string();
+        let encoded_header: String = encode(&serde_body).to_string();
+        //let beneficiary_type = beneficiary_type.to_string();
+        let encoded_content = encode(&serde_content).to_string();
+        let url = format!("{}?Header={}Content={}ConsumerID={}", self.tbank_url, encoded_header, encoded_content, consumer_id);
+        let req = self.client
+            .post(url)
+            .headers(headers)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                let temp = res.json::<Value>().await.unwrap();
+                let result = TransferResponse {
+                    status_text: temp["Content"]["ServiceResponse"]["ServiceRespHeader"]["ErrorText"].clone().to_string(),
+                    post_balance: Some(temp["Content"]["ServiceResponse"]["BalanceAfter"]["_content_"].clone().to_string()),
+                    pre_balance: Some(temp["Content"]["ServiceResponse"]["BalanceBefore"]["_content_"].clone().to_string()),
+                    transaction_amount: content.transaction_amount.clone(),
+                    transaction_reference_number: Some(temp["Content"]["ServiceResponse"]["TransactionID"]["_content_"].clone().to_string()),
+                };
+                Ok(result)
             }
             Err(e) => {
                 warn!("{}", e);

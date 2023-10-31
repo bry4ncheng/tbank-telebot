@@ -32,3 +32,61 @@ pub struct DepositResponse {
     #[serde(rename = "TransactionID")]
     transaction_id: String,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct BeneficiaryList {
+    //Shows successful messages as well.. strange
+    #[serde(rename = "BeneficiaryList")]
+    pub beneficiary_list: Beneficiaries,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Beneficiaries {
+    //Shows successful messages as well.. strange
+    #[serde(rename = "Beneficiary")]
+    pub beneficiary: Vec<Beneficiary>
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Beneficiary {
+    //Shows successful messages as well.. strange
+    #[serde(rename = "AccountId")]
+    pub account_id: String,
+    #[serde(rename = "Description")]
+    pub description: String,
+    #[serde(rename = "Currency")]
+    pub currency: String,
+    #[serde(rename = "BeneficiaryID")]
+    pub beneficiary_id: String
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AddBeneficiaryBody {
+    #[serde(rename = "AccountID")]
+    pub account_id: String,
+    #[serde(rename = "Description")]
+    pub description: String
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TransferBody {
+    #[serde(rename = "AccountFrom")]
+    pub account_from: String,
+    #[serde(rename = "AccountTo")]
+    pub account_to: String,
+    #[serde(rename = "TransactionAmount")]
+    pub transaction_amount: String,
+    #[serde(rename = "TransactionReferenceNumber")]
+    pub transaction_reference_number: String,
+    #[serde(rename = "narrative")]
+    pub narrative: String
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TransferResponse {
+    pub status_text: String,
+    pub post_balance: Option<String>,
+    pub pre_balance: Option<String>,
+    pub transaction_amount: String,
+    pub transaction_reference_number: Option<String>,
+}

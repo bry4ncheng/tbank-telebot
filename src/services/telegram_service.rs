@@ -99,7 +99,10 @@ impl TelegramService {
                     match redis_repo.clone().get_data_from_redis(&action_key).await {
                         Ok(result) => {
                             match &result.as_str() {
-                                &"Transfer" =>{
+                                &"Transfer" => {
+                                    // TODO: Show summary
+
+
 
                                 }
                                 &"Login" =>{
@@ -308,6 +311,19 @@ impl TelegramService {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
+                &"Add Beneficiary" => {
+                    if q.message.is_some() {
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id;
+                        let full_key: String = format!("{}:{}", chat.id.to_string(), "Action");
+                        let result = redis_repo.clone().set_data_in_redis(&full_key, "Add Beneficiary".to_owned(), false).await;
+                        let keyboard = Self::make_keyboard(["Back".to_owned()].to_vec());
+                        bot.edit_message_text(chat.id, id, "Key in account number to add?").reply_markup(keyboard).await?;
+                    } else if let Some(id) = q.inline_message_id {
+                        TelegramService::send_start( bot, id.to_string()).await?;
+                    }
+                }
                 &"Transfer" =>{
                     // Delete user state to invalidate 
                     if q.message.is_some() {
@@ -320,9 +336,16 @@ impl TelegramService {
                             Ok(login_cred) => {
                                 let mut data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
                                 data.service_name = "getBeneficiaryList".to_owned(); 
-                                // Do call 
+                                // TODO: Do call getBeneficiary
+
+
+
+
+                                // TODO: Add Beneficiary
+
+
                                 let keyboard = Self::make_keyboard(["Add Beneficiary".to_owned(), "Back".to_owned()].to_vec());
-                                bot.edit_message_text(chat.id, id, "Where would you like to trasnfer to?").reply_markup(keyboard).await?;
+                                bot.edit_message_text(chat.id, id, "Where would you like to transfer to?").reply_markup(keyboard).await?;
                             }
                             Err(_) => {
                                 TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
