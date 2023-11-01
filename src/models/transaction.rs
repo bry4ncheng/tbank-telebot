@@ -50,7 +50,7 @@ pub struct Beneficiaries {
 #[derive(Serialize, Deserialize)]
 pub struct Beneficiary {
     //Shows successful messages as well.. strange
-    #[serde(rename = "AccountId")]
+    #[serde(rename = "AccountID")]
     pub account_id: String,
     #[serde(rename = "Description")]
     pub description: String,
@@ -68,15 +68,15 @@ pub struct AddBeneficiaryBody {
     pub description: String
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TransferBody {
-    #[serde(rename = "AccountFrom")]
+    #[serde(rename = "accountFrom")]
     pub account_from: String,
-    #[serde(rename = "AccountTo")]
+    #[serde(rename = "accountTo")]
     pub account_to: String,
-    #[serde(rename = "TransactionAmount")]
+    #[serde(rename = "transactionAmount")]
     pub transaction_amount: String,
-    #[serde(rename = "TransactionReferenceNumber")]
+    #[serde(rename = "transactionReferenceNumber")]
     pub transaction_reference_number: String,
     #[serde(rename = "narrative")]
     pub narrative: String

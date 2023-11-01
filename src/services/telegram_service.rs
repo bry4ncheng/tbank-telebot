@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use crate::config::AppConfig;
 use crate::enums::telegram::Command;
+use crate::models::transaction::{TransferBody, AddBeneficiaryBody};
 use crate::models::{Error, CustomerRequest};
 use crate::models::authentication::{RequestOTP, ServiceLoginOtpResponse};
 use clap::Parser;
+use rand::Rng;
 use reqwest::Client;
 use teloxide::prelude::ResponseResult;
 use teloxide::{prelude::Requester, types::Message, Bot};
@@ -53,7 +55,7 @@ impl TelegramService {
     fn make_keyboard(options:Vec<String>) -> InlineKeyboardMarkup {
         let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![];
 
-        for chunk_options in options.chunks(3) {
+        for chunk_options in options.chunks(1) {
             let row = chunk_options
                 .iter()
                 .map(|option| InlineKeyboardButton::callback(option.to_owned(), option.to_owned()))
@@ -100,14 +102,114 @@ impl TelegramService {
                     match redis_repo.clone().get_data_from_redis(&action_key).await {
                         Ok(result) => {
                             match &result.as_str() {
+                                &"Add Ben Desc" => {
+                                    let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                                    let my_int: i32 = msg.id.to_string().parse().unwrap();
+                                    bot.edit_message_text(msg.chat.id, teloxide::types::MessageId(my_int-1), "Please wait ...").await?;
+                                    let full_key: String = format!("{}:{}",msg.chat.id.to_string(), "AddBen");
+                                    let temp = redis_repo.clone().get_data_from_redis(&full_key).await.unwrap();
+                                    let mut add_ben_data=  serde_json::from_str::<AddBeneficiaryBody>(&temp).unwrap();
+                                    let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
+                                    add_ben_data.description = text.to_string();
+                                    let full_key: String = format!("{}:{}",msg.chat.id.to_string(), "LoginCred");
+                                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                                        match result {
+                                            Ok(login_cred) => {
+                                                let mut data: CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                                data.service_name = "addBeneficiary".to_owned();
+                                                let result = tbank_repo.add_beneficiary(data, add_ben_data).await;
+                                                if let Ok(status) = result{
+                                                    if status.contains("invocation successful"){
+                                                        bot.delete_message(msg.chat.id, msg.id).await?;
+                                                        bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                                        bot.send_message(msg.chat.id,  "Beneficiary has been added").await?;
+                                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), true).await?;
+
+                                                    }else{
+                                                        bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
+                                                    }
+                                                }else{
+                                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                                    TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
+                                                }
+                                            },
+                                            Err(_) => {
+                                                bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
+                                            },
+                                        }
+                                }
+                                &"Add Beneficiary" => {
+                                    let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                                    let temp  = AddBeneficiaryBody{
+                                        account_id: text.to_string(),
+                                        description: "".to_owned(),
+                                    };
+                                    bot.delete_message(msg.chat.id, msg.id).await?;
+                                    let my_int: i32 = msg.id.to_string().parse().unwrap();
+                                    bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                    let full_key: String = format!("{}:{}",msg.chat.id.to_string(), "AddBen");
+                                    let temp_string: String =  serde_json::to_string(&temp).unwrap();
+                                    let _ = redis_repo.clone().set_data_in_redis(&full_key, temp_string, false).await;
+                                    let _ = redis_repo.clone().set_data_in_redis(&action_key, "Add Ben Desc".to_owned(), false).await;
+
+                                    let keyboard = Self::make_keyboard(["Back".to_owned()].to_vec());
+                                    bot.send_message(msg.chat.id,  "Label for the account?").reply_markup(keyboard).await?;
+                                }
                                 &"Amount" => {
-                                    // TODO: Show summary
-                                    let amount: i32 = text.to_string().parse().unwrap();
-                                    //Set in redis
+                                    let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                                    let amount = text.trim().parse::<f64>();
+                                    let my_int: i32 = msg.id.to_string().parse().unwrap();
+                                    bot.edit_message_text(msg.chat.id, teloxide::types::MessageId(my_int-1), "Please wait ...").await?;
+                                    if let Ok(a) = amount{
+                                        bot.delete_message(msg.chat.id, msg.id).await?;
 
-
-
-
+                                        let full_key: String = format!("{}:{}",msg.chat.id.to_string(), "LoginCred");
+                                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                                        match result {
+                                            Ok(login_cred) => {
+                                                let mut data: CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                                data.service_name = "getCustomerAccounts".to_owned();
+                                                let account_result = tbank_repo.get_customer_accounts(data).await;
+                                                match account_result{
+                                                    Ok(accounts) => {
+                                                        let mut vec_kb: Vec<String> = vec![];
+                                                        for one in accounts {
+                                                            if one.balance.parse::<f64>().unwrap_or(0.0) > a{
+                                                                let acc = format!("Transfer From {}", one.account_id).to_string();
+                                                                vec_kb.push(acc);
+                                                            }
+                                                        }
+                                                        if vec_kb.len() > 0{
+                                                            let tx_key: String = format!("{}:{}", msg.chat.id.to_string(), "Transfer");
+                                                            let temp = redis_repo.clone().get_data_from_redis(&tx_key).await.unwrap();
+                                                            let mut tx_body =  serde_json::from_str::<TransferBody>(&temp).unwrap();
+                                                            tx_body.transaction_amount = format!("{:.2}", a);
+                                                            let _ = redis_repo.clone().remove_data_in_redis(&tx_key).await;
+                                                            let tx_body_string =  serde_json::to_string(&tx_body).unwrap();
+                                                            let _ = redis_repo.clone().set_data_in_redis(&tx_key, tx_body_string, false).await;
+                                                            vec_kb.push("Back".to_owned());
+                                                            bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                                            let keyboard = Self::make_keyboard(vec_kb);
+                                                            bot.send_message(msg.chat.id,  "Which account would you like to use?").reply_markup(keyboard).await?;
+                                                        }else{
+                                                            TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;                                                        }
+                                                    }
+                                                    Err(_) => {
+                                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
+                                                    },
+                                                }
+                                            },
+                                            Err(_) => {
+                                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
+                                            },
+                                        }
+                
+                                    }else{
+                                        bot.delete_message(msg.chat.id, teloxide::types::MessageId(my_int-1)).await?;
+                                        TelegramService::to_send_correct_start( bot, msg, redis_repo.clone(), false).await?; 
+                                    }
                                 }
                                 &"Login" =>{
                                     let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
@@ -207,7 +309,7 @@ impl TelegramService {
                                                         let j = serde_json::to_string(&data).unwrap();
                                                         let full_key: String = format!("{}:{}",msg.chat.id.to_string(), "LoginCred");
                                                         let _ = redis_repo.clone().set_data_in_redis(&full_key,j, false).await;
-                                                        let invest_key: String = format!("{}:{}",data.user_id.clone(), "AutoInvest");
+                                                        let invest_key: String = format!("{}:{}",data.user_id.clone(), "MicroInvest");
                                                         let has_invest = match redis_repo.clone().get_data_from_redis(&invest_key).await{
                                                             Ok(_) => true,
                                                             Err(_) => false,
@@ -271,8 +373,8 @@ impl TelegramService {
                     match result {
                         Ok(login_cred) => {
                             let data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
-                            let full_key: String = format!("{}:{}",data.user_id, "AutoInvest");
-                            action = "Enable AutoInvest".to_owned();
+                            let full_key: String = format!("{}:{}",data.user_id, "MicroInvest");
+                            action = "Enable MicroInvest".to_owned();
                             let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
                         }
                         Err(_) => {
@@ -289,10 +391,9 @@ impl TelegramService {
             } else if action.contains("Transfer To") {
                 account_number = action.split(" ").last().unwrap().to_string();
                 action = "Amount".to_owned();
-
-
-
-
+            }else if action.contains("Transfer From"){
+                account_number = action.split(" ").last().unwrap().to_string();
+                action = "TransferFrom".to_owned();
             }
             
             info!("GOT TBANK");
@@ -302,10 +403,20 @@ impl TelegramService {
                         let msg = q.message.unwrap();
                         let chat = msg.clone().chat;
                         let id = msg.clone().id;
-                        let full_key: String = format!("{}:{}", chat.id.to_string(), "Action");
                         // TODO: Transfer To String
+                        let num = rand::thread_rng().gen_range(u64::MIN..u64::MAX);
 
-                        let result = redis_repo.clone().set_data_in_redis(&full_key, "Amount".to_owned(), false).await;
+                        let tx_body = TransferBody{
+                            account_from: "".to_owned(),
+                            account_to: account_number,
+                            transaction_amount: "".to_owned(),
+                            transaction_reference_number: format!("{}", num),
+                            narrative: "".to_owned(),
+                        };
+                        let tx_key: String = format!("{}:{}", chat.id.to_string(), "Transfer");
+                        let full_key: String = format!("{}:{}", chat.id.to_string(), "action");
+                        let _ = redis_repo.clone().set_data_in_redis(&full_key, "Amount".to_owned(), false).await;
+                        let _ = redis_repo.clone().set_data_in_redis(&tx_key, serde_json::to_string(&tx_body).unwrap(), false).await;
                         let keyboard = Self::make_keyboard(["Back".to_owned()].to_vec());
                         bot.edit_message_text(chat.id, id, "How much do you want to transfer?").reply_markup(keyboard).await?;
                     } else if let Some(id) = q.inline_message_id {
@@ -342,8 +453,8 @@ impl TelegramService {
                         let msg = q.message.unwrap();
                         let chat = msg.clone().chat;
                         let id = msg.clone().id;
-                        let full_key: String = format!("{}:{}", chat.id.to_string(), "Action");
-                        let result = redis_repo.clone().set_data_in_redis(&full_key, "Add Beneficiary".to_owned(), false).await;
+                        let full_key: String = format!("{}:{}", chat.id.to_string(), "action");
+                        let _ = redis_repo.clone().set_data_in_redis(&full_key, "Add Beneficiary".to_owned(), false).await;
                         let keyboard = Self::make_keyboard(["Back".to_owned()].to_vec());
                         bot.edit_message_text(chat.id, id, "Key in account number to add?").reply_markup(keyboard).await?;
                     } else if let Some(id) = q.inline_message_id {
@@ -362,8 +473,6 @@ impl TelegramService {
                             Ok(login_cred) => {
                                 let mut data: CustomerRequest = serde_json::from_str(&login_cred).unwrap();
                                 data.service_name = "getBeneficiaryList".to_owned(); 
-                                // TODO: Do call getBeneficiary
-                                //We'll just handle transfers to others for now
                                 let beneficiaries = match tbank_repo.get_beneficiaries(data, BeneficiaryEnum::OTHER).await {
                                     Ok(ben) => ben,
                                     Err(e) => {
@@ -399,32 +508,155 @@ impl TelegramService {
                         let chat = msg.clone().chat;
                         let id = msg.clone().id;
                         bot.edit_message_text(chat.id, id, "Please wait ...").await?;
+                        let tx_key: String = format!("{}:{}", msg.chat.id.to_string(), "Transfer");
+                        let temp = redis_repo.clone().get_data_from_redis(&tx_key).await.unwrap();
+                        let mut tx_body =  serde_json::from_str::<TransferBody>(&temp).unwrap();
+                        tx_body.account_from = account_number;
+                        tx_body.narrative = "Simple Transfer".to_owned();
+                        let _ = redis_repo.clone().remove_data_in_redis(&tx_key).await;
+                        let _ = redis_repo.clone().set_data_in_redis(&tx_key, serde_json::to_string(&tx_body).unwrap(), false).await;
                         let full_key: String = format!("{}:{}",chat.id.to_string(), "LoginCred");
                         let result = redis_repo.clone().get_data_from_redis(&full_key).await;
                         match result {
                             Ok(login_cred) => {
-                                let mut data: CustomerRequest = serde_json::from_str(&login_cred).unwrap();
-                                data.service_name = "getCustomerAccounts".to_owned();
-                                let account_result = tbank_repo.get_customer_accounts(data).await;
-                                match account_result{
-                                    Ok(accounts) => {
-                                        let mut vec_kb: Vec<String> = vec![];
-                                        for one in accounts {
-                                            let acc = format!("Transfer From {}", one.account_id).to_string();
-                                            vec_kb.push(acc);
-                                        }
+                                let data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                let invest_key: String = format!("{}:{}",data.user_id, "MicroInvest");
+                                let acct = match redis_repo.clone().get_data_from_redis(&invest_key).await{
+                                    Ok(acct) => if acct != ""{Some(acct)}else{None},
+                                    Err(_) => None,
+                                };
+                                info!("{:?} --data??", acct);
 
-                                        vec_kb.push("Back".to_owned());
-                                        let keyboard = Self::make_keyboard(["Back".to_owned()].to_vec());
-                                        bot.edit_message_text(chat.id, id, "Which account do you want to use?").reply_markup(keyboard).await?;
+                                if let Some(acct) = acct {
+                                    if acct != tx_body.account_from{
+                                        let full_key: String = format!("{}:{}",data.user_id, "Percentage");
+                                        match redis_repo.clone().get_data_from_redis(&full_key).await{
+                                            Ok(percentage_str) => {
+                                                info!("{:?} --data??", percentage_str);
+                                                let percentage = percentage_str.parse::<f64>().unwrap();
+                                                let temp = tx_body.transaction_amount.parse::<f64>().unwrap();
+                                                let to_invest = temp * (percentage/100.0);
+                                                let total: f64 = temp+to_invest;
+                                                info!("{:?} --data??", total);
+                                                let mut data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                                data.service_name = "getCustomerAccounts".to_owned();
+                                                let account_result = tbank_repo.get_customer_accounts(data).await;
+                                                let is_enough = match account_result{
+                                                    Ok(accounts) => {   
+                                                        let mut to_return = false;                
+                                                        for one in accounts{
+                                                            if one.account_id == tx_body.account_from{
+                                                                to_return =  one.balance.parse::<f64>().unwrap() >= total;
+                                                                info!("{:?} --data??", to_return);
+                                                                break;
+                                                            }
+                                                        }
+                                                        to_return
+                                                    }
+                                                    Err(_) => {
+                                                        false
+                                                    },
+                                                };
+                                                if is_enough {
+                                                    let keyboard: InlineKeyboardMarkup = Self::make_keyboard(["Confirm".to_owned(), "Back".to_owned()].to_vec());
+                                                    bot.edit_message_text(chat.id, id, format!("SUMMARY\nTransferring to: {}\nTransferring from {}\nAmount: ${:.2}\nMicro-Invest amount: ${:.2}", tx_body.account_to, tx_body.account_from, temp, to_invest)).reply_markup(keyboard).await?;        
+                                                }else{
+                                                    TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                                                }
+                                            },  
+                                            Err(_) => {
+                                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                                            }                                   
+                                        }
+                                    }else{
+                                        let keyboard: InlineKeyboardMarkup = Self::make_keyboard(["Confirm".to_owned(), "Back".to_owned()].to_vec());
+                                        bot.edit_message_text(chat.id, id, format!("SUMMARY\nTransferring to: {}\nTransferring from {}\nAmount: ${}", tx_body.account_to, tx_body.account_from, tx_body.transaction_amount)).reply_markup(keyboard).await?;    
                                     }
-                                    Err(_) => {
-                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
-                                    },
+
+                                }else{
+                                    let keyboard: InlineKeyboardMarkup = Self::make_keyboard(["Confirm".to_owned(), "Back".to_owned()].to_vec());
+                                    bot.edit_message_text(chat.id, id, format!("SUMMARY\nTransferring to: {}\nTransferring from {}\nAmount: ${}", tx_body.account_to, tx_body.account_from, tx_body.transaction_amount)).reply_markup(keyboard).await?;
                                 }
-                            },
+                            }
                             Err(_) => {
-                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
+                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                            },
+                        }
+                        
+                    } else if let Some(id) = q.inline_message_id {
+                        TelegramService::send_start( bot, id.to_string()).await?;
+                    }
+                }
+                &"Confirm" =>{
+                    if q.message.is_some() {
+                        
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id;
+                        bot.edit_message_text(chat.id, id, "Please wait ...").await?;        
+
+                        let tx_key: String = format!("{}:{}", msg.chat.id.to_string(), "Transfer");
+                        let temp: String = redis_repo.clone().get_data_from_redis(&tx_key).await.unwrap();
+                        let mut tx_body: TransferBody =  serde_json::from_str::<TransferBody>(&temp).unwrap();
+                        let full_key: String = format!("{}:{}",chat.id.to_string(), "LoginCred");
+                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                        match result {
+                            Ok(login_cred) => {
+                                let mut data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                let invest_key: String = format!("{}:{}",data.user_id, "MicroInvest");
+                                let acct = match redis_repo.clone().get_data_from_redis(&invest_key).await{
+                                    Ok(acct) => if acct != ""{Some(acct)}else{None},
+                                    Err(_) => None,
+                                };
+                                let percent_key: String = format!("{}:{}",data.user_id, "Percentage");
+                                let percentage_str = match redis_repo.clone().get_data_from_redis(&percent_key).await{
+                                    Ok(percent) => if percent != ""{Some(percent)}else{None},
+                                    Err(_) => None,
+                                };
+                                data.service_name = "creditTransfer".to_owned();
+                                let r =tbank_repo.clone().transfer(data.clone(), tx_body.clone()).await;
+                                if let Ok(status) = r{
+                                    if status.contains("invocation successful"){
+                                        if let Some(acct) = acct {
+                                            if acct != tx_body.account_from{
+                                                let percentage = percentage_str.unwrap().parse::<f64>().unwrap();
+                                                let temp = tx_body.transaction_amount.parse::<f64>().unwrap();
+                                                let to_invest = temp * (percentage/100.0);
+                                                tx_body.account_to = acct;
+                                                tx_body.transaction_amount = format!("{:.2}", to_invest);
+                                                tx_body.narrative = "Micro-Invest".to_owned();
+                                                let other_r =tbank_repo.clone().transfer(data.clone(), tx_body.clone()).await;
+                                                if let Ok(other_status) = other_r{
+                                                    if other_status.contains("invocation successful"){
+                                                        bot.edit_message_text(chat.id, id, "The transfer has been done").await?;        
+                                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), true).await?;   
+                                                    }else{
+                                                        bot.edit_message_text(chat.id, id, "The transfer has been done except for your Micro Invest").await?;        
+                                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), true).await?;            
+                                                    }
+                                                }else{
+                                                    bot.edit_message_text(chat.id, id, "The transfer has been done except for your Micro Inve   st").await?;        
+                                                    TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), true).await?;            
+                                                }
+                                            }else{
+                                                bot.edit_message_text(chat.id, id, "The transfer has been done").await?;        
+                                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), true).await?;            
+                                            }
+        
+                                        }else{
+                                            bot.edit_message_text(chat.id, id, "The transfer has been done").await?;        
+                                            TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), true).await?;            
+                                        }
+                                    }
+                                    else{
+                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                                    }
+                                }else{
+                                    TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                                }
+                            }
+                            Err(_) => {
+                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
                             },
                         }
                     } else if let Some(id) = q.inline_message_id {
@@ -444,7 +676,7 @@ impl TelegramService {
                             Ok(login_cred) => {
                                 let mut request_data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
                                 request_data.service_name = "getCustomerDetails".to_owned();
-                                let full_key: String = format!("{}:{}",request_data.user_id, "AutoInvest");
+                                let full_key: String = format!("{}:{}",request_data.user_id, "MicroInvest");
                                 let result_details: Result<crate::models::TBankResponse<crate::models::customer::GetCustomerDetails>, anyhow::Error> = tbank_repo.clone().get_customer_details(request_data.clone()).await;
                                 match result_details{
                                     Ok(data) => {
@@ -496,22 +728,63 @@ impl TelegramService {
                     }
                 }
                 &"Remove Account" =>{
-                    // Delete user AutoInvest
-                    if let Some(Message { id, chat, .. }) = q.message {
-                        let full_key: String = format!("{}:{}",chat.id.to_string(), "AutoInvest");
-                        let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
-                        let keyboard = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), "Enable AutoInvest".to_owned(),].to_vec());
-                        bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
+                    // Delete user MicroInvest
+                    if q.message.is_some() {
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id;   
+                         let full_key: String = format!("{}:{}", msg.chat.id.to_string(), "LoginCred");
+                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                        match result {
+                            Ok(data_string) => {      
+                                let data:CustomerRequest = serde_json::from_str(&data_string).unwrap();
+                                let full_key: String = format!("{}:{}",data.user_id.to_string(), "MicroInvest");
+                                let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
+                                let full_key: String = format!("{}:{}",data.user_id.to_string(), "Percentage");
+                                let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
+                                let keyboard: InlineKeyboardMarkup = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), "Enable MicroInvest".to_owned(),].to_vec());
+                                bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
+                            },
+                            Err(_) => {
+                                TelegramService::send_start( bot, msg.chat.id.to_string()).await?;
+                            },
+                        }
+                        
                     } else if let Some(id) = q.inline_message_id {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
                 &"Back" =>{
-                    if let Some(Message { id, chat, .. }) = q.message {
-                        // let action_key = format!("{}:{}", chat.id.to_string(), "action");
-                        // let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
-                        let keyboard = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), "Enable AutoInvest".to_owned(),].to_vec());
-                        bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
+                    if q.message.is_some() {
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id;    
+                        let add_ben_key: String = format!("{}:{}",msg.chat.id.to_string(), "AddBen");
+                        let action_key = format!("{}:{}", chat.id.to_string(), "action");
+                        let tx_key: String = format!("{}:{}", chat.id.to_string(), "Transfer");
+                        let _ = redis_repo.clone().remove_data_in_redis(&tx_key).await;
+                        let _ = redis_repo.clone().remove_data_in_redis(&action_key).await;
+                        let _ = redis_repo.clone().remove_data_in_redis(&add_ben_key).await;
+                        let full_key: String = format!("{}:{}", msg.chat.id.to_string(), "LoginCred");
+                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                        match result {
+                            Ok(data_string) => {      
+                                let data:CustomerRequest = serde_json::from_str(&data_string).unwrap();
+                                let invest_key: String = format!("{}:{}",data.user_id, "MicroInvest");
+                                info!("{}", invest_key);
+                                let has_invest = match redis_repo.clone().get_data_from_redis(&invest_key).await{
+                                    Ok(acct) => if acct != ""{true}else{false},
+                                    Err(_) => false,
+                                };
+                                let invest_option = if has_invest{"Update MicroInvest".to_owned()}else{"Enable MicroInvest".to_owned()};
+                                let keyboard = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), invest_option].to_vec());
+                                bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
+                            },
+                            Err(_) => {
+                                TelegramService::send_start( bot, msg.chat.id.to_string()).await?;
+                            },
+                        }
+                        
                     } else if let Some(id) = q.inline_message_id {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
@@ -526,7 +799,7 @@ impl TelegramService {
                         match result {
                             Ok(login_cred) => {
                                 let data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
-                                let full_key: String = format!("{}:{}",data.user_id, "AutoInvest");
+                                let full_key: String = format!("{}:{}",data.user_id, "MicroInvest");
                                 let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
                                 let _ = redis_repo.clone().set_data_in_redis(&full_key, account_number.clone(), false).await;
                                 bot.edit_message_text(chat.id, id, format!("You have chosen: {}", account_number)).await?;
@@ -554,7 +827,7 @@ impl TelegramService {
                                 let full_key: String = format!("{}:{}",data.user_id, "Percentage");
                                 let _ = redis_repo.clone().remove_data_in_redis(&full_key).await;
                                 let _ = redis_repo.clone().set_data_in_redis(&full_key, percentage_to_invest.clone(), false).await;
-                                let keyboard = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), "Update AutoInvest".to_owned()].to_vec());
+                                let keyboard = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), "Update MicroInvest".to_owned()].to_vec());
                                 bot.edit_message_text(chat.id, id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
         
                             }
@@ -566,7 +839,7 @@ impl TelegramService {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
-                &"Enable AutoInvest" =>{
+                &"Enable MicroInvest" =>{
                     if q.message.is_some() {
                         let msg = q.message.unwrap();
                         let chat = msg.clone().chat;
@@ -616,7 +889,7 @@ impl TelegramService {
                         TelegramService::send_start( bot, id.to_string()).await?;
                     }
                 }
-                &"Update AutoInvest" =>{
+                &"Update MicroInvest" =>{
                     if q.message.is_some() {
                         let msg = q.message.unwrap();
                         let chat = msg.clone().chat;
@@ -628,7 +901,7 @@ impl TelegramService {
                             Ok(login_cred) => {
                                 let mut data:CustomerRequest = serde_json::from_str(&login_cred).unwrap();
                                 data.service_name = "getCustomerAccounts".to_owned();
-                                let invest_key: String = format!("{}:{}",data.user_id.to_string(), "AutoInvest");
+                                let invest_key: String = format!("{}:{}",data.user_id.to_string(), "MicroInvest");
                                 let invest_account = match redis_repo.clone().get_data_from_redis(&invest_key).await{
                                     Ok(r) => r,
                                     Err(_) => "".to_string(),
@@ -637,7 +910,7 @@ impl TelegramService {
                                 match account_result{
                                     Ok(accounts) => {
                                         {
-                                            let mut full_text = format!("Your current AutoInvest account {}.\nPlease select one or would you like to create a new one?\n", invest_account);
+                                            let mut full_text = format!("Your current MicroInvest account {}.\nPlease select one or would you like to create a new one?\n", invest_account);
                                             // let mut options = ["Back"].to_vec();
                                             let mut options = [].to_vec();
 
@@ -735,7 +1008,7 @@ impl TelegramService {
                     bot.send_message(msg.chat.id, "Sorry something went wrong. Please try again.").await?;
                 }
                 let data:CustomerRequest = serde_json::from_str(&data_string).unwrap();
-                let invest_key: String = format!("{}:{}",data.user_id, "AutoInvest");
+                let invest_key: String = format!("{}:{}",data.user_id, "MicroInvest");
                 info!("{}", invest_key);
                 let has_invest = match redis_repo.clone().get_data_from_redis(&invest_key).await{
                     Ok(acct) => if acct != ""{true}else{false},
@@ -760,7 +1033,7 @@ impl TelegramService {
     }
 
     async fn send_logged_in_user_start(bot:Bot, id:String, has_invest:bool) -> ResponseResult<()> {
-        let invest_option = if has_invest{"Update AutoInvest".to_owned()}else{"Enable AutoInvest".to_owned()};
+        let invest_option = if has_invest{"Update MicroInvest".to_owned()}else{"Enable MicroInvest".to_owned()};
         let keyboard = Self::make_keyboard(["Check Balance".to_owned(), "Transfer".to_owned(), "Logout".to_owned(), invest_option].to_vec());
         bot.send_message(id, "Hello! What banking service can I help you with today?").reply_markup(keyboard).await?;
         Ok(())
