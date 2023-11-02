@@ -1,14 +1,17 @@
 use anyhow::anyhow;
+use axum::body::Bytes;
+use futures_util::task::waker;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::Value;
 use tracing::{warn, info};
-use crate::models::customer::{AccountData, GetCustomerAccounts, GetCustomerDetails, OnBoardCustomerData};
+use crate::models::customer::{AccountData, GetCustomerAccounts, GetCustomerDetails, HistoricalMonthlyBalanceBody, OnBoardCustomerData};
 use crate::models::{TBankResponse, Error, ServiceResponseHeader, CustomerRequest};
 use urlencoding::encode;
 use crate::enums::beneficiary::BeneficiaryEnum;
 use crate::models;
 use crate::models::authentication::{RequestOTP, ServiceLoginOtpResponse};
-use crate::models::transaction::{AddBeneficiaryBody, Beneficiaries, TransferBody, TransferResponse, Beneficiary};
+use crate::models::chart::ChartBody;
+use crate::models::transaction::{AddBeneficiaryBody, Beneficiaries, TransferBody, Beneficiary};
 
 
 #[allow(dead_code)]
@@ -16,14 +19,16 @@ use crate::models::transaction::{AddBeneficiaryBody, Beneficiaries, TransferBody
 pub struct TBankRepository {
     client: reqwest::Client,
     tbank_url: String,
+    chart_url: String
 }
 
 impl TBankRepository {
-    pub fn new(tbank_url: String) -> Self {
+    pub fn new(tbank_url: String, chart_url: String) -> Self {
         let client = reqwest::Client::new();
         Self {
             client,
-            tbank_url
+            tbank_url,
+            chart_url
         }
     }
 
@@ -293,6 +298,65 @@ impl TBankRepository {
             Err(e) => {
                 warn!("{}", e);
                 Err(anyhow!("Something went wrong with the RequestOTP API."))
+            }
+        };
+        res
+    }
+
+    pub async fn get_balance_chart(self, body: ChartBody) -> anyhow::Result<Bytes> {
+        let serde_body = serde_json::to_string(&body).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let req = self.client
+            .post(self.chart_url.clone())
+            .headers(headers)
+            .body(serde_body)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                let temp = res.bytes().await.unwrap();
+                Ok(temp)
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the Chart API."))
+            }
+        };
+        res
+    }
+
+    pub async fn get_monthly_balance_trend(self, body: CustomerRequest, content: HistoricalMonthlyBalanceBody) -> anyhow::Result<ChartBody> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap());
+        let serde_body = serde_json::to_string(&body).unwrap();
+        let serde_content = serde_json::to_string(&content).unwrap();
+        println!("{:?}", serde_content);
+        let consumer_id = encode("RIB").to_string();
+        let encoded_header: String = encode(&serde_body).to_string();
+        let encoded_content = encode(&serde_content).to_string();
+        let url = format!("{}?Header={}&Content={}&ConsumerID={}", self.tbank_url, encoded_header, encoded_content, consumer_id);
+        println!("{:?}", url);
+        let req = self.client
+            .post(url)
+            .headers(headers)
+            .send()
+            .await;
+        let res = match req {
+            Ok(res) => {
+                let temp = res.json::<Value>().await.unwrap();
+                let chart = serde_json::from_value::<ChartBody>(temp["Content"]["ServiceResponse"]["TrendData"].clone());
+                match chart {
+                    Ok(res) => Ok(res),
+                    Err(e) => {
+                        warn!("{}", e);
+                        Err(anyhow!("Something went wrong with the getMonthlyBalanceTrend API."))
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("{}", e);
+                Err(anyhow!("Something went wrong with the getMonthlyBalanceTrend API."))
             }
         };
         res

@@ -21,7 +21,9 @@ use teloxide::{
     },
     utils::command::BotCommands,
 };
+use teloxide::types::InputFile;
 use crate::enums::beneficiary::BeneficiaryEnum;
+use crate::models::customer::HistoricalMonthlyBalanceBody;
 use crate::repositories::redis_repository::RedisRepository;
 
 
@@ -82,7 +84,8 @@ impl TelegramService {
         info!("GOT REDIS");
         
         let tbank_repo = TBankRepository::new(
-            app_config.tbank_url.clone()
+            app_config.tbank_url.clone(),
+            app_config.chart_generator_url.clone()
         );
         info!("GOT TBANK");
         if let Some(text) = msg.text() {
@@ -359,7 +362,8 @@ impl TelegramService {
             info!("GOT REDIS");
             
             let tbank_repo = TBankRepository::new(
-                app_config.tbank_url.clone()
+                app_config.tbank_url.clone(),
+                app_config.chart_generator_url.clone()
             );
             let mut account_number = "".to_owned();
             let mut percentage_to_invest = "2".to_owned();
@@ -382,9 +386,15 @@ impl TelegramService {
                         },
                     }
                 }
-            } else if action.contains("%"){
+
+            } else if action.contains("Balance History") {
+                account_number = action.split(" ").nth(2).unwrap().to_string();
+                action = "Chart".to_owned();
+            }
+            else if action.contains("%"){
                 percentage_to_invest = action.replace("%", "");
                 action = "Percentage".to_owned();
+
             } else if action.contains("Account") && action != "Remove Account"{
                 account_number = action.split(" ").last().unwrap().to_string();
                 action = "Account".to_owned();
@@ -959,11 +969,15 @@ impl TelegramService {
                                 match account_result{
                                     Ok(accounts) => {
                                         let mut full_text = "Your Account Balance is:\n".to_string();
-                                        for one in accounts{
+                                        let mut vec_acc = vec![];
+
+                                        for one in accounts {
                                             let temp =format!("{} - {}{}\n", one.account_id, one.currency, one.balance);
                                             full_text = format!("{}{}", full_text, temp);
+                                            vec_acc.push(format!("View Account {} Balance History", one.account_id));
                                         }
-                                        let keyboard = Self::make_keyboard(["Back".to_owned()].to_vec());
+                                        vec_acc.push("Back".to_owned());
+                                        let keyboard = Self::make_keyboard(vec_acc);
                                         bot.edit_message_text(chat.id, id, full_text).reply_markup(keyboard).await?;
                                     }
                                     Err(_) => {
@@ -973,6 +987,48 @@ impl TelegramService {
                             },
                             Err(_) => {
                                 TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;            
+                            },
+                        }
+                    } else if let Some(id) = q.inline_message_id {
+                        TelegramService::send_start( bot, id.to_string()).await?;
+                    }
+
+                }
+                &"Chart" =>{
+                    if q.message.is_some() {
+                        let msg = q.message.unwrap();
+                        let chat = msg.clone().chat;
+                        let id = msg.clone().id;
+                        bot.edit_message_text(chat.id, id, "Please wait ...").await?;
+                        let full_key: String = format!("{}:{}",chat.id.to_string(), "LoginCred");
+                        let result = redis_repo.clone().get_data_from_redis(&full_key).await;
+                        match result {
+                            Ok(login_cred) => {
+                                let mut data: CustomerRequest = serde_json::from_str(&login_cred).unwrap();
+                                data.service_name = "getMonthlyBalanceTrend".to_owned();
+                                let content = HistoricalMonthlyBalanceBody {
+                                    account_id: account_number.clone(),
+                                    //Default to 6
+                                    num_months: "6".to_string(),
+                                };
+                                let monthly_balance_result = tbank_repo.clone().get_monthly_balance_trend(data,  content).await;
+                                match monthly_balance_result{
+                                    Ok(accounts) => {
+                                        let chart = tbank_repo.clone().get_balance_chart(accounts).await.unwrap();
+                                        let full_text = format!("{} balance over the past 6 months", account_number.clone());
+                                        bot.delete_message(chat.id, msg.id).await?;
+                                        let png = InputFile::memory(chart);
+                                        bot.send_photo(chat.id, png).await?;
+                                        let keyboard = Self::make_keyboard(["Back".to_owned()].to_vec());
+                                        bot.send_message(chat.id, full_text).reply_markup(keyboard).await?;
+                                    }
+                                    Err(_) => {
+                                        TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
+                                    },
+                                }
+                            },
+                            Err(_) => {
+                                TelegramService::to_send_correct_start(bot, msg.clone(), redis_repo.clone(), false).await?;
                             },
                         }
                     } else if let Some(id) = q.inline_message_id {

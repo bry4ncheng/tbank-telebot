@@ -219,3 +219,12 @@ pub struct Maintenancehistory {
     pub last_transaction_branch: String,
     pub last_maintenance_officer: String,
 }
+
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct HistoricalMonthlyBalanceBody {
+    #[serde(rename = "accountID")]
+    pub account_id: String,
+    #[serde(rename = "numMonths")]
+    pub num_months: String,
+}

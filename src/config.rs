@@ -12,4 +12,7 @@ pub struct AppConfig {
     #[clap(env)]
     pub redis_url: String,
 
+    #[clap(env)]
+    pub chart_generator_url: String,
+
 }

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 pub mod transaction;
 pub mod customer;
 pub mod authentication;
+pub mod chart;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TBankResponse<T> {
     #[serde(rename = "Content")]
